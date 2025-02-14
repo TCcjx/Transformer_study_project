@@ -13,9 +13,9 @@ import textwrap
 
 # 超参数
 
-batch_size = 3 # 同时处理多少条数据
-block_size = 16 # 训练、验证的字符串长度
-n_embedding = 3 # token的embedding长度
+batch_size = 8 # 同时处理多少条数据
+block_size = 6 # 训练、验证的字符串长度
+n_embedding = 16 # token的embedding长度
 wrap_width = 50
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -51,13 +51,50 @@ print(f'文件{file_name}读取完成')
 
 # 获取批量数据
 def get_batch(split):
-    data = train_data if split == 'train' else 'val_data'
+    data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size,(batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix],dim=0)
     y = torch.stack([data[i+1:i+1+block_size] for i in ix])
     # x, y = x.to(device), y.to(device)
     return x,y
 
+# --损失测评--
+@torch.no_grad() # 不做梯度计算的decorator,作用域为整个函数
+def estimate_loss(model,eval_iters=100):
+    out = {}
+    model.eval() # 评估模式
+
+    for split in ['train','val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X,Y = get_batch(split)
+            X,Y = X.to(device),Y.to(device)
+            logits, loss = model(X,Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean() # 分别计算train\val的loss均值
+
+    model.train() # 恢复成训练模式
+    return out
+
+# Head
+class Head(nn.Module):
+    def __init__(self,head_size):
+        super().__init__()
+        self.value = nn.Linear(n_embedding,head_size,bias=False) # 线性变换层
+        self.register_buffer("tril",torch.tril(torch.ones(block_size,block_size))) # 不可训练的结构(约等于常量)
+        self.dropout = nn.Dropout(p=0.2)
+    def forward(self, x):
+        B, T, C = x.shape
+        wei = torch.ones((T,T),device=device)
+        wei = wei.masked_fill(self.tril == 0, float('-inf'))
+        wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
+
+        # print(f'wei:{wei.shape},x:{x.shape}')
+        v = self.value(x)
+        out = wei @ v
+        # print(f'out-shape:{out.shape}')
+        return out
 
 # --傻瓜模型--
 class LanguageModel(nn.Module):
@@ -70,14 +107,17 @@ class LanguageModel(nn.Module):
         super(LanguageModel, self).__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embedding)
         self.position_embedding_table = nn.Embedding(block_size, n_embedding)
-        self.network = nn.Linear(n_embedding, vocab_size)
+        self.head = Head(n_embedding)
+        self.network1 = nn.Linear(n_embedding, 100)
+        self.network2 = nn.Linear(100,vocab_size)
     def forward(self, idx, targets=None):
         B, T = idx.shape # B->batch_size;T->block_size  数据为token(整数)形式
         token_embd = self.token_embedding_table(idx)
         position_idx = torch.arange(T,device=device)
         position_embd = self.position_embedding_table(position_idx)
         x = token_embd + position_embd # (B,T,n_embedding)
-        logits = self.network(x) # (B,T,vocab_size)
+        head_out = self.head(x)
+        logits = self.network2(F.relu(self.network1(head_out))) # (B,T,vocab_size)
         # print(f'x:{x.shape},logits:{logits.shape}')
         if targets is None:
             loss = None
@@ -126,7 +166,9 @@ def main():
         optimizer.zero_grad(set_to_none=True) # 把旧的梯度归零
         loss.backward() # 反向传播
         optimizer.step() # 梯度更新计算
-        print(f'epoch:{i+1},loss:{loss}')
+        if i % 50 ==0 or i == max_iter-1:
+            losses = estimate_loss(model)
+            print(f'epoch:{i+1},train_loss:{losses["train"]:.4f},val_loss:{losses["val"]:.4f}')
 
 
     max_new_tokens = 500
@@ -157,6 +199,19 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # head = Head(head_size=5)
+    # print('下三角矩阵：')
+    # print(head.tril)
+    # wei = torch.ones(block_size,block_size) # 注意力矩阵
+    # print('注意力矩阵：')
+    # print(wei)
+    # wei = wei.masked_fill(head.tril==0,float('-inf'))
+    # print('掩码后的注意力矩阵：')
+    # print(wei)
+    # wei = F.softmax(wei,dim=-1)
+    # print('softmax之后的注意力矩阵：')
+    # print(wei)
+
 # x = x.to(device)
 # output,loss = model(x)
 # print(output)
