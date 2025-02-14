@@ -12,7 +12,7 @@ import random
 import textwrap
 
 # 超参数
-<<<<<<< HEAD
+
 batch_size = 3 # 同时处理多少条数据
 block_size = 16 # 训练、验证的字符串长度
 n_embedding = 3 # token的embedding长度
@@ -20,13 +20,13 @@ wrap_width = 50
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # device = 'cpu'
-=======
+
 batch_size = 8 # 同时处理多少条数据
 block_size = 5 # 训练、验证的字符串长度
 n_embedding = 3 # token的embedding长度
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
->>>>>>> f4516b6df3c34264f1b678c2936be845395c7329
+
 torch.manual_seed(1337) # 随机种子
 file_name = "../hong_lou_meng.txt"
 # 文本 -> 词典/字典(按字划分,按词划分) -> Token -> Embedding(词嵌入)
@@ -49,14 +49,14 @@ data = torch.tensor(encode(text),dtype=torch.long) # 用整数列表表示文本
 n = int(0.9*len(data)) # 前百分之九十的数据用于训练
 train_data = data[:n] # 训练数据
 val_data = data[n:] # 验证数据
-<<<<<<< HEAD
+
 # print('train_data  length:',len(train_data))
 # print('val_data length:',len(val_data))
 print(f'文件{file_name}读取完成')
 # 获取批量数据
 def get_batch(split):
     data = train_data if split == 'train' else val_data
-=======
+
 print(len(train_data))
 print(len(val_data))
 
@@ -64,14 +64,13 @@ print(f'文件{file_name}读取完成')
 # 获取批量数据
 def get_batch(split):
     data = train_data if split == 'train' else 'val_data'
->>>>>>> f4516b6df3c34264f1b678c2936be845395c7329
     ix = torch.randint(len(data) - block_size,(batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix],dim=0)
     y = torch.stack([data[i+1:i+1+block_size] for i in ix])
     # x, y = x.to(device), y.to(device)
     return x,y
 
-<<<<<<< HEAD
+
 # --傻瓜模型--
 class LanguageModel(nn.Module):
     '''
@@ -117,14 +116,14 @@ class LanguageModel(nn.Module):
             token_sequ = torch.cat((token_sequ, token_next),dim=1) # 将新预测的字符，拼接到尾部，形成新的字符串
         new_tokens = token_sequ[:,-max_new_tokens:]
         return new_tokens
-=======
-x,y = get_batch('train')
-token_embedding_table = nn.Embedding(vocab_size,n_embedding)
-token_embd = token_embedding_table(x)
-position_embedding_table = nn.Embedding(block_size,n_embedding)
-position_idx = torch.arange(block_size) # 位置嵌入
-position_embd = position_embedding_table(position_idx)
-print(position_embd)
+
+# x,y = get_batch('train')
+# token_embedding_table = nn.Embedding(vocab_size,n_embedding)
+# token_embd = token_embedding_table(x)
+# position_embedding_table = nn.Embedding(block_size,n_embedding)
+# position_idx = torch.arange(block_size) # 位置嵌入
+# position_embd = position_embedding_table(position_idx)
+# print(position_embd)
 # print(x)
 # x_list = x.tolist()
 # for str_list in x_list:
@@ -137,15 +136,9 @@ print(position_embd)
 # print(encode('你好'))
 # print(decode([520,1314]))
 # print(get_batch('train'))
->>>>>>> f4516b6df3c34264f1b678c2936be845395c7329
 
 
 #--------------运行--------------
-x,y = get_batch('val')
-print('x:',x.shape)
-
-
-
 
 learning_rate = 1e-2
 max_iter = 1000
