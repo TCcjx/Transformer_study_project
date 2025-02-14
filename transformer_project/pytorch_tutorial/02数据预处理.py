@@ -14,9 +14,11 @@ import textwrap
 # 超参数
 
 batch_size = 8 # 同时处理多少条数据
-block_size = 6 # 训练、验证的字符串长度
-n_embedding = 16 # token的embedding长度
+block_size = 64 # 训练、验证的字符串长度
+n_embedding = 384 # token的embedding长度
 wrap_width = 50
+num_heads = 8
+head_size = n_embedding // num_heads
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # device = 'cpu'
@@ -80,12 +82,18 @@ def estimate_loss(model,eval_iters=100):
 class Head(nn.Module):
     def __init__(self,head_size):
         super().__init__()
-        self.value = nn.Linear(n_embedding,head_size,bias=False) # 线性变换层
+        self.key = nn.Linear(n_embedding, head_size, bias=False)
+        self.query = nn.Linear(n_embedding, head_size, bias=False)
+        self.value = nn.Linear(n_embedding, head_size, bias=False) # 线性变换层
         self.register_buffer("tril",torch.tril(torch.ones(block_size,block_size))) # 不可训练的结构(约等于常量)
         self.dropout = nn.Dropout(p=0.2)
     def forward(self, x):
         B, T, C = x.shape
-        wei = torch.ones((T,T),device=device)
+        k = self.key(x)
+        q = self.query(x)
+
+        # wei = torch.ones((T,T),device=device)
+        wei = q @ k.transpose(-2, -1) # 注意力方阵 (B, T, T)
         wei = wei.masked_fill(self.tril == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
         wei = self.dropout(wei)
@@ -94,6 +102,18 @@ class Head(nn.Module):
         v = self.value(x)
         out = wei @ v
         # print(f'out-shape:{out.shape}')
+        return out
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super(MultiHeadAttention, self).__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in  range(num_heads)])
+        self.proj = nn.Linear(head_size*num_heads, n_embedding)
+        self.dropout = nn.Dropout(p=0.2)
+
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads],dim=-1)
+        out = self.dropout(self.proj(out))
         return out
 
 # --傻瓜模型--
@@ -107,7 +127,8 @@ class LanguageModel(nn.Module):
         super(LanguageModel, self).__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embedding)
         self.position_embedding_table = nn.Embedding(block_size, n_embedding)
-        self.head = Head(n_embedding)
+        # self.head = Head(n_embedding)
+        self.multi_head = MultiHeadAttention(num_heads=num_heads,head_size=head_size)
         self.network1 = nn.Linear(n_embedding, 100)
         self.network2 = nn.Linear(100,vocab_size)
     def forward(self, idx, targets=None):
@@ -116,7 +137,8 @@ class LanguageModel(nn.Module):
         position_idx = torch.arange(T,device=device)
         position_embd = self.position_embedding_table(position_idx)
         x = token_embd + position_embd # (B,T,n_embedding)
-        head_out = self.head(x)
+        # head_out = self.head(x)
+        head_out = self.multi_head(x)
         logits = self.network2(F.relu(self.network1(head_out))) # (B,T,vocab_size)
         # print(f'x:{x.shape},logits:{logits.shape}')
         if targets is None:
