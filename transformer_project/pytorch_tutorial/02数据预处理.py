@@ -20,13 +20,6 @@ wrap_width = 50
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # device = 'cpu'
-
-batch_size = 8 # 同时处理多少条数据
-block_size = 5 # 训练、验证的字符串长度
-n_embedding = 3 # token的embedding长度
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
 torch.manual_seed(1337) # 随机种子
 file_name = "../hong_lou_meng.txt"
 # 文本 -> 词典/字典(按字划分,按词划分) -> Token -> Embedding(词嵌入)
@@ -54,13 +47,8 @@ val_data = data[n:] # 验证数据
 # print('val_data length:',len(val_data))
 print(f'文件{file_name}读取完成')
 # 获取批量数据
-def get_batch(split):
-    data = train_data if split == 'train' else val_data
 
-print(len(train_data))
-print(len(val_data))
 
-print(f'文件{file_name}读取完成')
 # 获取批量数据
 def get_batch(split):
     data = train_data if split == 'train' else 'val_data'
@@ -116,27 +104,6 @@ class LanguageModel(nn.Module):
             token_sequ = torch.cat((token_sequ, token_next),dim=1) # 将新预测的字符，拼接到尾部，形成新的字符串
         new_tokens = token_sequ[:,-max_new_tokens:]
         return new_tokens
-
-# x,y = get_batch('train')
-# token_embedding_table = nn.Embedding(vocab_size,n_embedding)
-# token_embd = token_embedding_table(x)
-# position_embedding_table = nn.Embedding(block_size,n_embedding)
-# position_idx = torch.arange(block_size) # 位置嵌入
-# position_embd = position_embedding_table(position_idx)
-# print(position_embd)
-# print(x)
-# x_list = x.tolist()
-# for str_list in x_list:
-#     print(str_list)
-#     print(decode(str_list))
-# print(token_embedding_table(x))
-
-
-# print(data)
-# print(encode('你好'))
-# print(decode([520,1314]))
-# print(get_batch('train'))
-
 
 #--------------运行--------------
 
