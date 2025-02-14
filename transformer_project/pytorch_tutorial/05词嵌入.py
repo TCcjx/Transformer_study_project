@@ -17,8 +17,3 @@ idx = torch.tensor(9)
 print(embedding_table(idx))
 print(embedding_table)
 
-<<<<<<< HEAD
-
-
-=======
->>>>>>> f4516b6df3c34264f1b678c2936be845395c7329
