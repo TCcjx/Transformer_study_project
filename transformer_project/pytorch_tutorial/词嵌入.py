@@ -1,7 +1,7 @@
 """
  @Author: TCcjx
  @Email: tcc2025@163.com
- @FileName: 05词嵌入.py
+ @FileName: 词嵌入.py
  @DateTime: 2025-02-07 17:41
  @SoftWare: PyCharm
 """

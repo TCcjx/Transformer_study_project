@@ -1,7 +1,7 @@
 """
  @Author: TCcjx
  @Email: tcc2025@163.com
- @FileName: 02数据预处理.py
+ @FileName: main.py
  @DateTime: 2025-02-06 11:57
  @SoftWare: PyCharm
 """
@@ -12,9 +12,8 @@ import random
 import textwrap
 
 # 超参数
-
-batch_size = 8 # 同时处理多少条数据
-block_size = 64 # 训练、验证的字符串长度
+batch_size = 16 # 同时处理多少条数据
+block_size = 128 # 训练、验证的字符串长度
 n_embedding = 384 # token的embedding长度
 wrap_width = 50
 num_heads = 8
@@ -25,7 +24,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 torch.manual_seed(1337) # 随机种子
 file_name = "../hong_lou_meng.txt"
 # 文本 -> 词典/字典(按字划分,按词划分) -> Token -> Embedding(词嵌入)
-# -----------数据预处理--------------
+# -----------数据预处理--------------f
 with open(file_name,'r',encoding='utf-8') as f:
     text = f.read()
 # 有序、不重复的列表
@@ -88,12 +87,12 @@ class Head(nn.Module):
         self.register_buffer("tril",torch.tril(torch.ones(block_size,block_size))) # 不可训练的结构(约等于常量)
         self.dropout = nn.Dropout(p=0.2)
     def forward(self, x):
-        B, T, C = x.shape
+        B, T, C = x.shape # batch_size,block_size,n_embedding
         k = self.key(x)
         q = self.query(x)
 
-        # wei = torch.ones((T,T),device=device)
-        wei = q @ k.transpose(-2, -1) # 注意力方阵 (B, T, T)
+        # wei = torch.ones((T,T),device=device) # 上下文三角掩码矩阵
+        wei = q @ k.transpose(-2, -1) / (k.shape[0]**-0.5) # 注意力方阵 (B, T, T)
         wei = wei.masked_fill(self.tril == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
         wei = self.dropout(wei)
@@ -116,7 +115,34 @@ class MultiHeadAttention(nn.Module):
         out = self.dropout(self.proj(out))
         return out
 
-# --傻瓜模型--
+
+class FeedForward(nn.Module):
+    def __init__(self, n_embedding):
+        super(FeedForward,self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embedding,n_embedding*4),
+            nn.ReLU(),
+            nn.Linear(n_embedding*4,n_embedding),
+            nn.Dropout(p=0.2)
+        )
+    def forward(self,x):
+        return self.net(x)
+
+class Block(nn.Module):
+    def __init__(self, n_embedding, num_heads):
+        super().__init__()
+        self.sa = MultiHeadAttention(num_heads,head_size) # 多头注意力网络(自注意力)
+        self.ffwd = FeedForward(n_embedding)
+        self.ln1 = nn.LayerNorm(n_embedding)
+        self.ln2 = nn.LayerNorm(n_embedding)
+
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x)) # 残差多头注意力网络
+        x = x + self.ffwd(self.ln2(x)) # 残差线性前馈层
+        return x
+
+n_layer = 3
+# --傻瓜语言模型--
 class LanguageModel(nn.Module):
     '''
     输入: number_embedding
@@ -128,18 +154,24 @@ class LanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embedding)
         self.position_embedding_table = nn.Embedding(block_size, n_embedding)
         # self.head = Head(n_embedding)
-        self.multi_head = MultiHeadAttention(num_heads=num_heads,head_size=head_size)
-        self.network1 = nn.Linear(n_embedding, 100)
-        self.network2 = nn.Linear(100,vocab_size)
+        # self.multi_head = MultiHeadAttention(num_heads=num_heads,head_size=head_size)
+        self.blocks = nn.Sequential(*[Block(n_embedding,num_heads) for _ in range(n_layer)]) # 残差多头注意力机制
+        self.ln_f = nn.LayerNorm(n_embedding)
+        self.lm_head = nn.Linear(n_embedding, vocab_size)
+
     def forward(self, idx, targets=None):
         B, T = idx.shape # B->batch_size;T->block_size  数据为token(整数)形式
         token_embd = self.token_embedding_table(idx)
         position_idx = torch.arange(T,device=device)
         position_embd = self.position_embedding_table(position_idx)
-        x = token_embd + position_embd # (B,T,n_embedding)
+        x = token_embd + position_embd # (B,T,n_embedding) 词嵌入 + 位置嵌入
         # head_out = self.head(x)
-        head_out = self.multi_head(x)
-        logits = self.network2(F.relu(self.network1(head_out))) # (B,T,vocab_size)
+        # head_out = self.multi_head(x)
+        x = self.blocks(x)
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+
+        # logits = self.network2(F.relu(self.network1(head_out))) # (B,T,vocab_size) vocab_size: 词表大小
         # print(f'x:{x.shape},logits:{logits.shape}')
         if targets is None:
             loss = None
