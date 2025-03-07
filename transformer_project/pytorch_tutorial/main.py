@@ -10,19 +10,21 @@ import torch.nn as nn
 from torch.nn import functional as F
 import random
 import textwrap
+import math
 
 # 超参数
-batch_size = 16 # 同时处理多少条数据
-block_size = 128 # 训练、验证的字符串长度
+batch_size = 32 # 同时处理多少条数据
+block_size = 256 # 训练、验证的字符串长度
 n_embedding = 384 # token的embedding长度
 wrap_width = 50
 num_heads = 8
 head_size = n_embedding // num_heads
 
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # device = 'cpu'
 torch.manual_seed(1337) # 随机种子
-file_name = "../hong_lou_meng.txt"
+file_name = "transformer_project\hong_lou_meng.txt"
 # 文本 -> 词典/字典(按字划分,按词划分) -> Token -> Embedding(词嵌入)
 # -----------数据预处理--------------f
 with open(file_name,'r',encoding='utf-8') as f:
@@ -53,6 +55,7 @@ print(f'文件{file_name}读取完成')
 # 获取批量数据
 def get_batch(split):
     data = train_data if split == 'train' else val_data
+    # 这里 len(data) - block_size 不会发生越界
     ix = torch.randint(len(data) - block_size,(batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix],dim=0)
     y = torch.stack([data[i+1:i+1+block_size] for i in ix])
@@ -67,7 +70,7 @@ def estimate_loss(model,eval_iters=100):
 
     for split in ['train','val']:
         losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
+        for k in range(eval_iters):  # 计算eval_iters次损失
             X,Y = get_batch(split)
             X,Y = X.to(device),Y.to(device)
             logits, loss = model(X,Y)
@@ -78,18 +81,20 @@ def estimate_loss(model,eval_iters=100):
     return out
 
 # Head
+# 单头注意力机制
 class Head(nn.Module):
     def __init__(self,head_size):
         super().__init__()
         self.key = nn.Linear(n_embedding, head_size, bias=False)
         self.query = nn.Linear(n_embedding, head_size, bias=False)
         self.value = nn.Linear(n_embedding, head_size, bias=False) # 线性变换层
-        self.register_buffer("tril",torch.tril(torch.ones(block_size,block_size))) # 不可训练的结构(约等于常量)
+        self.register_buffer("tril",torch.tril(torch.ones(block_size,block_size))) # 不可训练的结构(约等于常量) （下三角矩阵/包括对角线）
         self.dropout = nn.Dropout(p=0.2)
     def forward(self, x):
         B, T, C = x.shape # batch_size,block_size,n_embedding
         k = self.key(x)
         q = self.query(x)
+        v = self.value(x)
 
         # wei = torch.ones((T,T),device=device) # 上下文三角掩码矩阵
         wei = q @ k.transpose(-2, -1) / (k.shape[0]**-0.5) # 注意力方阵 (B, T, T)
@@ -98,13 +103,12 @@ class Head(nn.Module):
         wei = self.dropout(wei)
 
         # print(f'wei:{wei.shape},x:{x.shape}')
-        v = self.value(x)
         out = wei @ v
         # print(f'out-shape:{out.shape}')
         return out
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, num_heads, head_size):
+    def __init__(self, num_heads, head_size):  # 多头头数、头的大小head_size
         super(MultiHeadAttention, self).__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in  range(num_heads)])
         self.proj = nn.Linear(head_size*num_heads, n_embedding)
@@ -116,6 +120,7 @@ class MultiHeadAttention(nn.Module):
         return out
 
 
+# Feedforward层
 class FeedForward(nn.Module):
     def __init__(self, n_embedding):
         super(FeedForward,self).__init__()
@@ -128,7 +133,8 @@ class FeedForward(nn.Module):
     def forward(self,x):
         return self.net(x)
 
-class Block(nn.Module):
+# Tansformer Block
+class TransformerBlock(nn.Module):
     def __init__(self, n_embedding, num_heads):
         super().__init__()
         self.sa = MultiHeadAttention(num_heads,head_size) # 多头注意力网络(自注意力)
@@ -141,8 +147,8 @@ class Block(nn.Module):
         x = x + self.ffwd(self.ln2(x)) # 残差线性前馈层
         return x
 
-n_layer = 3
-# --傻瓜语言模型--
+n_layer = 8 # transformer Block的数量
+# --语言模型--
 class LanguageModel(nn.Module):
     '''
     输入: number_embedding
@@ -152,19 +158,27 @@ class LanguageModel(nn.Module):
         # super().__init__()
         super(LanguageModel, self).__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embedding)
-        self.position_embedding_table = nn.Embedding(block_size, n_embedding)
+        # 这里的位置嵌入 与 原论文不一致
+        # self.position_embedding_table = nn.Embedding(block_size, n_embedding)
         # self.head = Head(n_embedding)
         # self.multi_head = MultiHeadAttention(num_heads=num_heads,head_size=head_size)
-        self.blocks = nn.Sequential(*[Block(n_embedding,num_heads) for _ in range(n_layer)]) # 残差多头注意力机制
+        self.blocks = nn.Sequential(*[TransformerBlock(n_embedding,num_heads) for _ in range(n_layer)]) # 残差多头注意力机制
         self.ln_f = nn.LayerNorm(n_embedding)
         self.lm_head = nn.Linear(n_embedding, vocab_size)
 
     def forward(self, idx, targets=None):
         B, T = idx.shape # B->batch_size;T->block_size  数据为token(整数)形式
         token_embd = self.token_embedding_table(idx)
-        position_idx = torch.arange(T,device=device)
-        position_embd = self.position_embedding_table(position_idx)
-        x = token_embd + position_embd # (B,T,n_embedding) 词嵌入 + 位置嵌入
+        position_encoding_lookup_table = torch.zeros(block_size,n_embedding)
+        position = torch.arange(block_size).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, n_embedding, 2).float() * (-math.log(10000)) / n_embedding)
+        position_encoding_lookup_table[:,::2] = torch.sin(position * div_term)
+        position_encoding_lookup_table[:,1::2] = torch.cos(position * div_term)
+        position_encoding_lookup_table = position_encoding_lookup_table.unsqueeze(0).expand(B,-1,-1) # B: 输入批次数据的批次大小
+
+        # position_embd = self.position_embedding_table(position_idx)
+        position_encoding_lookup_table = position_encoding_lookup_table.to(device)
+        x = token_embd + position_encoding_lookup_table # (B,T,n_embedding) 词嵌入 + 位置嵌入
         # head_out = self.head(x)
         # head_out = self.multi_head(x)
         x = self.blocks(x)
@@ -196,18 +210,18 @@ class LanguageModel(nn.Module):
             token_next = torch.multinomial(probs,num_samples=1) # 把概率分布向量 --> 整数token
             token_next = token_next.to(device)
             token_sequ = torch.cat((token_sequ, token_next),dim=1) # 将新预测的字符，拼接到尾部，形成新的字符串
-        new_tokens = token_sequ[:,-max_new_tokens:]
+        new_tokens = token_sequ[:,-max_new_tokens:] # 新预测的max_new_tokens个续写词元
         return new_tokens
 
 #--------------运行--------------
 
-learning_rate = 1e-2
-max_iter = 1000
+learning_rate = 1e-3
+max_iter = 1
 def main():
     print(f'训练内容:{file_name}')
     model = LanguageModel() # 实例化模型
     model = model.to(device)
-    print('Model Parameters',sum(p.numel() for p in model.parameters()) / 1e6) # 打印参数
+    print('Model Parameters',sum(p.numel() for p in model.parameters()) / 1e6," M") # 打印参数
 
     # 设定一个优化器
     optimizer = torch.optim.AdamW(model.parameters(),lr=learning_rate)
